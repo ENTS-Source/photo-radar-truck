@@ -2,109 +2,115 @@
 #define DISTANCE_MM 10
 #define TOO_FAST_SPEED 4 // mm/s
 #define CAMERA_FLASH_PIN 10
+int pins[][2] = {{A0, A1}, {A2, A3}, {A4, A5}, {A6, A7}}; // Pairs of pins, matching number of tracks
 
 double triggerLevels[TRACKS][2];
 long triggered[TRACKS];
 
-int pins[][2] = {{A0, A1}, {A2, A3}, {A4, A5}, {A6, A7}}; // Pairs of pins, matching number of tracks
-
-void setup() {
-  Serial.begin(9600);
-
-  for (int i = 0; i < TRACKS; i++) {
-    pinMode(pins[i][0], INPUT); // A0
-    pinMode(pins[i][1], INPUT); // A1
-  }
-
-  pinMode(13, OUTPUT); // LED, onboard
-  pinMode(CAMERA_FLASH_PIN, OUTPUT);
-  digitalWrite(13, HIGH);
-
+void findTrackBaseline(int trackId) {
   int maxRounds = 5;
-  int roundResults[TRACKS][maxRounds][2];
-  for (int r = 0; r < maxRounds; r++){
-    for (int i = 0; i < TRACKS; i++) {
-       roundResults[i][r][0] = analogRead(pins[i][0]);
-       roundResults[i][r][1] = analogRead(pins[i][1]);
-    }
+  int rounds[maxRounds][2];
+
+  // Do rounds to get values
+  for (int r = 0; r < maxRounds; r++) {
+    rounds[r][0] = analogRead(pins[trackId][0]);
+    rounds[r][1] = analogRead(pins[trackId][1]);
     delay(100);
   }
 
-  for (int i = 0; i < TRACKS; i++) {
-    int mi1 = 1024;
-    int ma1 = 0;
-    int mi2 = 1024;
-    int ma2 = 0;
-    for (int r = 0; r < maxRounds; r++) {
-      int val = roundResults[i][r][0];
-      Serial.println("Track " + String(i) + " round " + String(r) + " has value " + String(val));
-      if (val > ma1) {
-        ma1 = val;
-      }
-      if (val < mi1) {
-        mi1 = val;
-      }
-      
-      val = roundResults[i][r][1];
-      if (val > ma2) {
-        ma2 = val;
-      }
-      if (val < mi2) {
-        mi2 = val;
-      }
-    }
+  // Find the mins and maxes for the sensors
+  int sensorOneMin = 1024;
+  int sensorTwoMin = 1024;
+  int sensorOneMax = 0;
+  int sensorTwoMax = 0;
+  for (int r = 0; r < maxRounds; r++) {
+    int val = rounds[r][0];
+    Serial.println("Track " + String(trackId) + " round " + String(r) + " sensor 0 has value " + String(val));
+    if (val > sensorOneMax) { sensorOneMax = val; }
+    if (val < sensorOneMin) { sensorOneMin = val; }
 
-    triggerLevels[i][0] = mi1 - ((mi1 + ma1) / 4.0);
-    triggerLevels[i][1] = mi2 - ((mi2 + ma2) / 4.0);
-    Serial.println("Track " + String(i) + " has min (" + String(mi1) + ", " + String(mi2) +") and max (" + String(ma1) + ", " + String(ma2) +") and triggers at (" + String(triggerLevels[i][0]) + ", " + String(triggerLevels[i][1]) + ")");
+    val = rounds[r][1];
+    Serial.println("Track " + String(trackId) + " round " + String(r) + " sensor 1 has value " + String(val));
+    if (val > sensorTwoMax) { sensorOneMax = val; }
+    if (val < sensorTwoMin) { sensorOneMin = val; }
   }
 
-  digitalWrite(13, LOW);
+  triggerLevels[trackId][0] = sensorOneMin - ((sensorOneMin + sensorOneMax) / 4.0); // over 4 because we want half the range
+  triggerLevels[trackId][1] = sensorTwoMin - ((sensorTwoMin + sensorTwoMax) / 4.0); // over 4 because we want half the range
+  Serial.println("Track " + String(trackId) + " has min (" + String(sensorOneMin) + ", " + String(sensorTwoMin) + ")");
+  Serial.println("Track " + String(trackId) + " has max (" + String(sensorOneMax) + ", " + String(sensorTwoMax) + ")");
+  Serial.println("Track " + String(trackId) + " has trigger level (" + String(triggerLevels[trackId][0]) + ", " + String(triggerLevels[trackId][1]) + ")");
+}
+
+void recordSpeed(int trackId, double timeDeltaMs, double mmPerSecond) {
+  Serial.println("Track " + String(trackId) + " moving at " + String(mmPerSecond) + " mm/s (in " + String(timeDeltaMs) + " ms)");
+}
+
+void cameraFlash() {
+  digitalWrite(CAMERA_FLASH_PIN, HIGH);
+  delay(100);
+  digitalWrite(CAMERA_FLASH_PIN, LOW);
+  delay(100);
+  digitalWrite(CAMERA_FLASH_PIN, HIGH);
+  delay(100);
+  digitalWrite(CAMERA_FLASH_PIN, LOW);
+}
+
+void checkTrackTrigger(int trackId) {
+  // Read the first sensor to determine if we tripped it or not
+  int val = analogRead(pins[trackId][0]);
+  int triggerVal = triggerLevels[trackId][0];
+  long lastTriggeredTime = triggered[trackId];
+  if (lastTriggeredTime == 0 && val <= triggerVal) {
+    Serial.println("Track " + String(trackId) + " triggered on sensor 0");
+    triggered[trackId] = millis();
+    lastTriggeredTime = millis();
+  }
+
+  if (lastTriggeredTime == 0) { return; } // don't check second sensor if we're not triggered
+
+  val = analogRead(pins[trackId][1]);
+  triggerVal = triggerLevels[trackId][1];
+  long currentTime = millis();
+  if (currentTime - lastTriggeredTime >= 30000) {
+    Serial.println("Track " + String(trackId) + " timed out");
+    triggered[trackId] = 0;
+    return;
+  }
+  if (val <= triggerVal) {
+    double delta = (currentTime - lastTriggeredTime) * 1.0;
+    if (delta == 0) { delta = 1; }
+
+    double carSpeed = DISTANCE_MM / (delta / 1000); // mm/s
+    recordSpeed(trackId, delta, carSpeed);
+    
+    triggered[trackId] = 0;
+
+    if (carSpeed > TOO_FAST_SPEED) {
+      Serial.println("Speeding detected on track " + String(trackId));
+      cameraFlash();
+    }
+  }
+}
+
+void setup() {
+  Serial.begin(9600);
+  pinMode(CAMERA_FLASH_PIN, OUTPUT);
+
+  // Use camera flash as indicator that we're setting up
+  digitalWrite(CAMERA_FLASH_PIN, HIGH);
+  
+  for (int i = 0; i < TRACKS; i++) {
+    pinMode(pins[i][0], INPUT); // A0
+    pinMode(pins[i][1], INPUT); // A1
+    findTrackBaseline(i);
+  }
+  
+  digitalWrite(CAMERA_FLASH_PIN, LOW); // done setup
 }
 
 void loop() {
-  // Check for triggers
   for (int i = 0; i < TRACKS; i++) {
-    int val = analogRead(pins[i][0]);
-    int triggerVal = triggerLevels[i][0];
-    int currentTime = triggered[i];
-    if (currentTime == 0 && val <= triggerVal) {
-      Serial.println("Track " + String(i) + " triggered on sensor 0");
-      triggered[i] = millis();
-    }
-  }
-
-  // Check for signal finish
-  for (int i = 0; i < TRACKS; i++) {
-    int val = analogRead(pins[i][1]);
-    int triggerVal = triggerLevels[i][1];
-    int triggeredTime = triggered[i];
-    if (millis() - triggeredTime > 30000 && triggeredTime != 0) {
-      Serial.println("Track " + String(i) + " timed out");
-      triggered[i] = 0;
-      triggeredTime = 0;
-    }
-    if (triggeredTime != 0 && val <= triggerVal) {
-      Serial.println("Track " + String(i) + " triggered on sensor 1");
-      double delta = (millis() - triggeredTime) * 1.0;
-      if (delta == 0) {
-        delta = 1.0;
-      }
-      
-      double carSpeed = (DISTANCE_MM) / (delta / 1000);
-      Serial.println("Track " + String(i) + " moving at " + String(carSpeed) + " mm/s");
-      triggered[i] = 0;
-
-      if (carSpeed > TOO_FAST_SPEED) {
-        Serial.println("Speeding detected on track " + String(i));
-        digitalWrite(CAMERA_FLASH_PIN, HIGH);
-        delay(100);
-        digitalWrite(CAMERA_FLASH_PIN, LOW);
-        delay(100);
-        digitalWrite(CAMERA_FLASH_PIN, HIGH);
-        delay(100);
-        digitalWrite(CAMERA_FLASH_PIN, LOW);
-      }
-    }
+    checkTrackTrigger(i);
   }
 }
