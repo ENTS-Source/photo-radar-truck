@@ -1,3 +1,7 @@
+#include <SPI.h>
+#include <SD.h>
+#include <SD_t3.h>
+
 #define TRACKS 1
 #define DISTANCE_MM 10
 #define TOO_FAST_SPEED 4 // mm/s
@@ -9,6 +13,7 @@
 #define SD_SCLK 13
 #define SD_CD A9
 #define SD_PRESENT_THRESHOLD 350 // Testing shows that 1 ~= not present, 650 ~= present
+#define SD_ENABLED false
 
 int pins[][2] = {{A0, A1}, {A2, A3}, {A4, A5}, {A6, A7}}; // Pairs of pins, matching number of tracks
 
@@ -18,9 +23,6 @@ long triggered[TRACKS];
 void findTrackBaseline(int trackId) {
   int maxRounds = 5;
   int rounds[maxRounds][2];
-
-  pinMode(SD_CD, INPUT);
-  Serial.println(String(analogRead(SD_CD)));
 
   // Do rounds to get values
   for (int r = 0; r < maxRounds; r++) {
@@ -53,8 +55,26 @@ void findTrackBaseline(int trackId) {
   Serial.println("Track " + String(trackId) + " has trigger level (" + String(triggerLevels[trackId][0]) + ", " + String(triggerLevels[trackId][1]) + ")");
 }
 
-void recordSpeed(int trackId, double timeDeltaMs, double mmPerSecond) {
+void recordSpeed(int trackId, double timeDeltaMs, double distanceMm, double mmPerSecond) {
   Serial.println("Track " + String(trackId) + " moving at " + String(mmPerSecond) + " mm/s (in " + String(timeDeltaMs) + " ms)");
+  if (analogRead(SD_CD) < SD_PRESENT_THRESHOLD) {
+    Serial.println("Cannot write speed: SD Card not present");
+    return;
+  }
+
+  const char* fileName = ("track" + String(trackId) + ".csv").c_str();
+  File dataFile = SD.open(fileName, FILE_WRITE);
+  if (dataFile) {
+    dataFile.println(String(trackId) + "," + String(timeDeltaMs) + "," + String(distanceMm) + "," + String(mmPerSecond));
+    dataFile.close();
+    Serial.println("Speed recorded in csv");
+  } else {
+    Serial.println("Error writing speed: File error");
+  }
+}
+
+void publishSpeed(int trackId, double timeDeltaMs, double distanceMm, double mmPerSecond) {
+  // TODO: Publish speed in km/h to alternate serial port (Display)
 }
 
 void cameraFlash() {
@@ -65,6 +85,15 @@ void cameraFlash() {
   digitalWrite(CAMERA_FLASH_PIN, HIGH);
   delay(100);
   digitalWrite(CAMERA_FLASH_PIN, LOW);
+}
+
+void errorLoop() {
+  while(true) { 
+    digitalWrite(CAMERA_FLASH_PIN, HIGH);
+    delay(250);
+    digitalWrite(CAMERA_FLASH_PIN, LOW);
+    delay(250);
+  }
 }
 
 void checkTrackTrigger(int trackId) {
@@ -94,7 +123,8 @@ void checkTrackTrigger(int trackId) {
     if (delta == 0) { delta = 1; }
 
     double carSpeed = DISTANCE_MM / (delta / 1000); // mm/s
-    recordSpeed(trackId, delta, carSpeed);
+    recordSpeed(trackId, delta, DISTANCE_MM, carSpeed);
+    publishSpeed(trackId, delta, DISTANCE_MM, carSpeed);
     
     triggered[trackId] = 0;
 
@@ -108,6 +138,7 @@ void checkTrackTrigger(int trackId) {
 void setup() {
   Serial.begin(9600);
   pinMode(CAMERA_FLASH_PIN, OUTPUT);
+  pinMode(SD_CD, INPUT);
 
   // Use camera flash as indicator that we're setting up
   digitalWrite(CAMERA_FLASH_PIN, HIGH);
@@ -116,6 +147,17 @@ void setup() {
     pinMode(pins[i][0], INPUT); // A0
     pinMode(pins[i][1], INPUT); // A1
     findTrackBaseline(i);
+  }
+
+  // Setup SD card
+  if (SD_ENABLED && !SD.begin(SD_CS)) {
+    Serial.println("SD Card failed or not present");
+    errorLoop();
+    return;
+  } else if (SD_ENABLED) {
+    Serial.println("SD Card enabled");
+  } else {
+    Serial.println("SD Card disabled by code");
   }
   
   digitalWrite(CAMERA_FLASH_PIN, LOW); // done setup
