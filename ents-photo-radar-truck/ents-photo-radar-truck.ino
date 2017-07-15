@@ -3,9 +3,10 @@
 #include <SD_t3.h>
 
 #define TRACKS 1
-#define DISTANCE_MM 10
+#define DISTANCE_MM 100
 #define TOO_FAST_SPEED 4 // mm/s
 #define CAMERA_FLASH_PIN 2
+#define CAR_SCALE 32
 
 #define SD_DIN 12
 #define SD_DOUT 11
@@ -14,6 +15,9 @@
 #define SD_CD A9
 #define SD_PRESENT_THRESHOLD 350 // Testing shows that 1 ~= not present, 650 ~= present
 #define SD_ENABLED false
+
+#define SIGN_SERIAL Serial3
+#define DEBUG_SERIAL Serial
 
 int pins[][2] = {{A0, A1}, {A2, A3}, {A4, A5}, {A6, A7}}; // Pairs of pins, matching number of tracks
 
@@ -38,27 +42,27 @@ void findTrackBaseline(int trackId) {
   int sensorTwoMax = 0;
   for (int r = 0; r < maxRounds; r++) {
     int val = rounds[r][0];
-    Serial.println("Track " + String(trackId) + " round " + String(r) + " sensor 0 has value " + String(val));
+    DEBUG_SERIAL.println("Track " + String(trackId) + " round " + String(r) + " sensor 0 has value " + String(val));
     if (val > sensorOneMax) { sensorOneMax = val; }
     if (val < sensorOneMin) { sensorOneMin = val; }
 
     val = rounds[r][1];
-    Serial.println("Track " + String(trackId) + " round " + String(r) + " sensor 1 has value " + String(val));
+    DEBUG_SERIAL.println("Track " + String(trackId) + " round " + String(r) + " sensor 1 has value " + String(val));
     if (val > sensorTwoMax) { sensorTwoMax = val; }
     if (val < sensorTwoMin) { sensorTwoMin = val; }
   }
 
   triggerLevels[trackId][0] = sensorOneMin - ((sensorOneMin + sensorOneMax) / 4.0); // over 4 because we want half the range
   triggerLevels[trackId][1] = sensorTwoMin - ((sensorTwoMin + sensorTwoMax) / 4.0); // over 4 because we want half the range
-  Serial.println("Track " + String(trackId) + " has min (" + String(sensorOneMin) + ", " + String(sensorTwoMin) + ")");
-  Serial.println("Track " + String(trackId) + " has max (" + String(sensorOneMax) + ", " + String(sensorTwoMax) + ")");
-  Serial.println("Track " + String(trackId) + " has trigger level (" + String(triggerLevels[trackId][0]) + ", " + String(triggerLevels[trackId][1]) + ")");
+  DEBUG_SERIAL.println("Track " + String(trackId) + " has min (" + String(sensorOneMin) + ", " + String(sensorTwoMin) + ")");
+  DEBUG_SERIAL.println("Track " + String(trackId) + " has max (" + String(sensorOneMax) + ", " + String(sensorTwoMax) + ")");
+  DEBUG_SERIAL.println("Track " + String(trackId) + " has trigger level (" + String(triggerLevels[trackId][0]) + ", " + String(triggerLevels[trackId][1]) + ")");
 }
 
 void recordSpeed(int trackId, double timeDeltaMs, double distanceMm, double mmPerSecond) {
-  Serial.println("Track " + String(trackId) + " moving at " + String(mmPerSecond) + " mm/s (in " + String(timeDeltaMs) + " ms)");
+  DEBUG_SERIAL.println("Track " + String(trackId) + " moving at " + String(mmPerSecond) + " mm/s (in " + String(timeDeltaMs) + " ms)");
   if (analogRead(SD_CD) < SD_PRESENT_THRESHOLD) {
-    Serial.println("Cannot write speed: SD Card not present");
+    DEBUG_SERIAL.println("Cannot write speed: SD Card not present");
     return;
   }
 
@@ -67,14 +71,20 @@ void recordSpeed(int trackId, double timeDeltaMs, double distanceMm, double mmPe
   if (dataFile) {
     dataFile.println(String(trackId) + "," + String(timeDeltaMs) + "," + String(distanceMm) + "," + String(mmPerSecond));
     dataFile.close();
-    Serial.println("Speed recorded in csv");
+    DEBUG_SERIAL.println("Speed recorded in csv");
   } else {
-    Serial.println("Error writing speed: File error");
+    DEBUG_SERIAL.println("Error writing speed: File error");
   }
 }
 
 void publishSpeed(int trackId, double timeDeltaMs, double distanceMm, double mmPerSecond) {
-  // TODO: Publish speed in km/h to alternate serial port (Display)
+  // TODO: Check math is actually working
+  double deltaHours = ((timeDeltaMs / 1000) * CAR_SCALE) / 60 / 60;
+  double distanceKm = distanceMm / 1000000;
+  double kmPerHour = distanceKm / deltaHours;
+  int kmPerHourInt = round(kmPerHour);
+  DEBUG_SERIAL.println("Publishing speed as " + String(kmPerHourInt) + " km/h");
+  SIGN_SERIAL.println(String(kmPerHourInt));
 }
 
 void cameraFlash() {
@@ -102,7 +112,7 @@ void checkTrackTrigger(int trackId) {
   int triggerVal = triggerLevels[trackId][0];
   long lastTriggeredTime = triggered[trackId];
   if (lastTriggeredTime == 0 && val <= triggerVal) {
-    Serial.println("Track " + String(trackId) + " triggered on sensor 0");
+    DEBUG_SERIAL.println("Track " + String(trackId) + " triggered on sensor 0");
     triggered[trackId] = millis();
     lastTriggeredTime = millis();
   }
@@ -113,12 +123,12 @@ void checkTrackTrigger(int trackId) {
   triggerVal = triggerLevels[trackId][1];
   long currentTime = millis();
   if (currentTime - lastTriggeredTime >= 30000) {
-    Serial.println("Track " + String(trackId) + " timed out");
+    DEBUG_SERIAL.println("Track " + String(trackId) + " timed out");
     triggered[trackId] = 0;
     return;
   }
   if (val <= triggerVal) {
-    Serial.println("Track " + String(trackId) + " triggered on sensor 1");
+    DEBUG_SERIAL.println("Track " + String(trackId) + " triggered on sensor 1");
     double delta = (currentTime - lastTriggeredTime) * 1.0;
     if (delta == 0) { delta = 1; }
 
@@ -129,14 +139,15 @@ void checkTrackTrigger(int trackId) {
     triggered[trackId] = 0;
 
     if (carSpeed > TOO_FAST_SPEED) {
-      Serial.println("Speeding detected on track " + String(trackId));
+      DEBUG_SERIAL.println("Speeding detected on track " + String(trackId));
       cameraFlash();
     }
   }
 }
 
 void setup() {
-  Serial.begin(9600);
+  DEBUG_SERIAL.begin(9600);
+  SIGN_SERIAL.begin(9600);
   pinMode(CAMERA_FLASH_PIN, OUTPUT);
   pinMode(SD_CD, INPUT);
 
@@ -151,13 +162,13 @@ void setup() {
 
   // Setup SD card
   if (SD_ENABLED && !SD.begin(SD_CS)) {
-    Serial.println("SD Card failed or not present");
+    DEBUG_SERIAL.println("SD Card failed or not present");
     errorLoop();
     return;
   } else if (SD_ENABLED) {
-    Serial.println("SD Card enabled");
+    DEBUG_SERIAL.println("SD Card enabled");
   } else {
-    Serial.println("SD Card disabled by code");
+    DEBUG_SERIAL.println("SD Card disabled by code");
   }
   
   digitalWrite(CAMERA_FLASH_PIN, LOW); // done setup
