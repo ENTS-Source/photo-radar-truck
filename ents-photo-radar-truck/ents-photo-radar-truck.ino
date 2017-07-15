@@ -1,7 +1,15 @@
 #define TRACKS 1
 #define DISTANCE_MM 10
 #define TOO_FAST_SPEED 4 // mm/s
-#define CAMERA_FLASH_PIN 10
+#define CAMERA_FLASH_PIN 2
+
+#define SD_DIN 12
+#define SD_DOUT 11
+#define SD_CS 10
+#define SD_SCLK 13
+#define SD_CD A9
+#define SD_PRESENT_THRESHOLD 350 // Testing shows that 1 ~= not present, 650 ~= present
+
 int pins[][2] = {{A0, A1}, {A2, A3}, {A4, A5}, {A6, A7}}; // Pairs of pins, matching number of tracks
 
 double triggerLevels[TRACKS][2];
@@ -11,11 +19,14 @@ void findTrackBaseline(int trackId) {
   int maxRounds = 5;
   int rounds[maxRounds][2];
 
+  pinMode(SD_CD, INPUT);
+  Serial.println(String(analogRead(SD_CD)));
+
   // Do rounds to get values
   for (int r = 0; r < maxRounds; r++) {
     rounds[r][0] = analogRead(pins[trackId][0]);
     rounds[r][1] = analogRead(pins[trackId][1]);
-    delay(100);
+    delay(150);
   }
 
   // Find the mins and maxes for the sensors
@@ -31,8 +42,8 @@ void findTrackBaseline(int trackId) {
 
     val = rounds[r][1];
     Serial.println("Track " + String(trackId) + " round " + String(r) + " sensor 1 has value " + String(val));
-    if (val > sensorTwoMax) { sensorOneMax = val; }
-    if (val < sensorTwoMin) { sensorOneMin = val; }
+    if (val > sensorTwoMax) { sensorTwoMax = val; }
+    if (val < sensorTwoMin) { sensorTwoMin = val; }
   }
 
   triggerLevels[trackId][0] = sensorOneMin - ((sensorOneMin + sensorOneMax) / 4.0); // over 4 because we want half the range
@@ -50,7 +61,7 @@ void cameraFlash() {
   digitalWrite(CAMERA_FLASH_PIN, HIGH);
   delay(100);
   digitalWrite(CAMERA_FLASH_PIN, LOW);
-  delay(100);
+  delay(25);
   digitalWrite(CAMERA_FLASH_PIN, HIGH);
   delay(100);
   digitalWrite(CAMERA_FLASH_PIN, LOW);
@@ -78,6 +89,7 @@ void checkTrackTrigger(int trackId) {
     return;
   }
   if (val <= triggerVal) {
+    Serial.println("Track " + String(trackId) + " triggered on sensor 1");
     double delta = (currentTime - lastTriggeredTime) * 1.0;
     if (delta == 0) { delta = 1; }
 
