@@ -2,8 +2,8 @@
 #include <SD.h>
 #include <SD_t3.h>
 
-#define TRACKS 1
-#define DISTANCE_MM 100
+#define TRACKS 4
+#define DISTANCE_MM 200
 #define TOO_FAST_SPEED 4 // mm/s
 #define CAMERA_FLASH_PIN 2
 #define CAR_SCALE 32
@@ -14,7 +14,7 @@
 #define SD_SCLK 13
 #define SD_CD A9
 #define SD_PRESENT_THRESHOLD 350 // Testing shows that 1 ~= not present, 650 ~= present
-#define SD_ENABLED false
+#define SD_ENABLED true
 
 #define SIGN_SERIAL Serial3
 #define DEBUG_SERIAL Serial
@@ -27,6 +27,8 @@ long triggered[TRACKS];
 void findTrackBaseline(int trackId) {
   int maxRounds = 5;
   int rounds[maxRounds][2];
+
+  delay(250); // Wait a short while for the board to warm up
 
   // Do rounds to get values
   for (int r = 0; r < maxRounds; r++) {
@@ -153,12 +155,6 @@ void setup() {
 
   // Use camera flash as indicator that we're setting up
   digitalWrite(CAMERA_FLASH_PIN, HIGH);
-  
-  for (int i = 0; i < TRACKS; i++) {
-    pinMode(pins[i][0], INPUT); // A0
-    pinMode(pins[i][1], INPUT); // A1
-    findTrackBaseline(i);
-  }
 
   // Setup SD card
   if (SD_ENABLED && !SD.begin(SD_CS)) {
@@ -169,6 +165,12 @@ void setup() {
     DEBUG_SERIAL.println("SD Card enabled");
   } else {
     DEBUG_SERIAL.println("SD Card disabled by code");
+  }
+  
+  for (int i = 0; i < TRACKS; i++) {
+    pinMode(pins[i][0], INPUT); // A0
+    pinMode(pins[i][1], INPUT); // A1
+    findTrackBaseline(i);
   }
   
   digitalWrite(CAMERA_FLASH_PIN, LOW); // done setup
