@@ -80,10 +80,9 @@ void recordSpeed(int trackId, double timeDeltaMs, double distanceMm, double mmPe
 }
 
 void publishSpeed(int trackId, double timeDeltaMs, double distanceMm, double mmPerSecond) {
-  // TODO: Check math is actually working
-  double deltaHours = ((timeDeltaMs / 1000) * CAR_SCALE) / 60 / 60;
-  double distanceKm = distanceMm / 1000000;
-  double kmPerHour = distanceKm / deltaHours;
+  double distanceMmScaled = distanceMm * CAR_SCALE;
+  double mmPerSecondScaled = distanceMmScaled / (timeDeltaMs / 1000);
+  double kmPerHour = mmPerSecondScaled * 0.0036;
   int kmPerHourInt = round(kmPerHour);
   DEBUG_SERIAL.println("Publishing speed as " + String(kmPerHourInt) + " km/h");
   SIGN_SERIAL.println(String(kmPerHourInt));
